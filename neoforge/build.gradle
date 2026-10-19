@@ -9,11 +9,6 @@ architectury {
 
 loom {
     accessWidenerPath = project(":common").loom.accessWidenerPath
-
-    neoForge {
-//        convertAccessWideners = true
-//        extraAccessWideners.add loom.accessWidenerPath.get().asFile.name
-    }
 }
 
 configurations {
@@ -58,6 +53,7 @@ shadowJar {
 }
 
 remapJar {
+    atAccessWideners.add(loom.accessWidenerPath.get().asFile.name)
     input.set shadowJar.archiveFile
     dependsOn shadowJar
     from(rootProject.file("./LICENSE"))
@@ -67,6 +63,29 @@ remapJar {
 jar {
     archiveClassifier.set("dev")
 }
+
+// Development uses the access widener directly; production NeoForge needs its AT.
+// Check the remapped artifact so a dev-only access change cannot ship again.
+def verifyWaterAccessTransformer = tasks.register('verifyWaterAccessTransformer') {
+    dependsOn remapJar
+    inputs.file(remapJar.archiveFile)
+    doLast {
+        def artifact = remapJar.archiveFile.get().asFile
+        new java.util.zip.ZipFile(artifact).withCloseable { zip ->
+            def entry = zip.getEntry('META-INF/accesstransformer.cfg')
+            if (entry == null) {
+                throw new GradleException("Missing access transformer in ${artifact.name}")
+            }
+            def transformer = zip.getInputStream(entry).withCloseable { it.getText('UTF-8') }
+            def waterAccess = 'public net.minecraft.world.level.block.FarmBlock isNearWater(Lnet/minecraft/world/level/LevelReader;Lnet/minecraft/core/BlockPos;)Z'
+            if (!transformer.readLines().any { it.trim() == waterAccess }) {
+                throw new GradleException("Missing FarmBlock.isNearWater access in ${artifact.name}")
+            }
+        }
+    }
+}
+
+check.dependsOn verifyWaterAccessTransformer
 
 sourcesJar {
     def commonSources = project(":common").sourcesJar
